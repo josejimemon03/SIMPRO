@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL para el histórico de OEE
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: simpro_user
+      POSTGRES_PASSWORD: simpro_password
+      POSTGRES_DB: simpro_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Broker MQTT (Mosquitto) para recibir datos de los ESP32
+  broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # Servidor Backend (FastAPI)
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://simpro_user:simpro_password@db:5432/simpro_db
+      - MQTT_BROKER=broker
+      - MQTT_PORT=1883
+    depends_on:
+      - db
+      - broker
+    volumes:
+      - .:/app
+
+  # Simulador de sensores ESP32 (MQTT) — opcional: docker compose --profile sim up
+  sensors:
+    profiles: ["sim"]
+    build: .
+    command: ["python", "scripts/simulate_sensors.py", "--broker", "broker", "--interval", "2.5"]
+    environment:
+      - MQTT_BROKER=broker
+      - MQTT_PORT=1883
+      - SIM_FAULT_CHANCE=0.02
+    depends_on:
+      - broker
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
