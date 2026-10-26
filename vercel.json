@@ -1,8 +1,4 @@
-Configure this repository to deploy on Vercel as a project with multiple services.
 
-Here is a suggested `vercel.json` to add to the repo root directory, auto-detected from the repository layout. Treat it as a starting point, not a finished answer:
-
-```json
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
