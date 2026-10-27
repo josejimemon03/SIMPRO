@@ -4,6 +4,8 @@ import random
 
 from app.sensor_sim import (
     SensorReading,
+    apply_manual_stop,
+    clear_down,
     initial_sensors,
     tick_sensor,
     tick_all,
@@ -26,36 +28,50 @@ def test_mqtt_topic_and_payload():
     assert payload["linea_id"] == "soldadura"
     assert payload["contador"] == payload["units"]
     assert payload["down"] is False
+    assert payload["manual_stop"] is False
 
 
-def test_tick_can_force_fault_with_seeded_rng():
+def test_tick_fault_only_recommends_not_stops():
+    """fault_chance solo sube el ciclo (ámbar); nunca pone down."""
     s = SensorReading(
         station_id="corte", name="Corte", meta=45, ciclo=42, oee=88, units=100, down=False
     )
-    # fault_chance=1.0 → siempre falla si random() < 1
     rng = random.Random(0)
-    down = tick_sensor(s, fault_chance=1.0, rng=rng)
-    assert down.down is True
-    assert down.oee <= s.oee
+    warned = tick_sensor(s, fault_chance=1.0, rng=rng)
+    assert warned.down is False
+    assert warned.manual_stop is False
+    assert warned.ciclo >= int(round(s.meta * 1.12))
 
 
-def test_tick_stays_down_until_cleared():
+def test_manual_stop_keeps_station_down():
     s = SensorReading(
-        station_id="pintura", name="Pintura", meta=40, ciclo=38, oee=50, units=100, down=True
+        station_id="pintura", name="Pintura", meta=40, ciclo=38, oee=90, units=100, down=False
     )
-    still_down = tick_sensor(s, recover_chance=1.0, rng=random.Random(1))
-    assert still_down.down is True
-    assert still_down.ciclo == 0
+    stopped = apply_manual_stop(s, True)
+    assert stopped.manual_stop is True
+    assert stopped.down is True
+    assert stopped.ciclo == 0
+
+    still = tick_sensor(stopped, fault_chance=0.0, rng=random.Random(1))
+    assert still.down is True
+    assert still.manual_stop is True
+    assert still.ciclo == 0
 
 
-def test_clear_down_reactivates_station():
-    from app.sensor_sim import clear_down
-
+def test_clear_down_clears_manual_stop():
     s = SensorReading(
-        station_id="pintura", name="Pintura", meta=40, ciclo=0, oee=50, units=100, down=True
+        station_id="pintura",
+        name="Pintura",
+        meta=40,
+        ciclo=0,
+        oee=50,
+        units=100,
+        down=True,
+        manual_stop=True,
     )
     recovered = clear_down(s)
     assert recovered.down is False
+    assert recovered.manual_stop is False
     assert recovered.ciclo == recovered.meta
     assert recovered.oee >= 60
 

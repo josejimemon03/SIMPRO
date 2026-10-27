@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paho.mqtt.client as mqtt
 
 from app.mqtt import COMMAND_TOPIC_PREFIX
-from app.sensor_sim import clear_down, initial_sensors, tick_all
+from app.sensor_sim import apply_manual_stop, clear_down, initial_sensors, tick_all
 
 
 def parse_args():
@@ -37,8 +37,12 @@ def parse_args():
     p.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", "1883")))
     p.add_argument("--interval", type=float, default=float(os.getenv("SIM_INTERVAL", "2.5")),
                    help="Segundos entre publicaciones")
-    p.add_argument("--fault-chance", type=float, default=float(os.getenv("SIM_FAULT_CHANCE", "0.02")),
-                   help="Probabilidad por tick de parada aleatoria (0–1)")
+    p.add_argument(
+        "--fault-chance",
+        type=float,
+        default=float(os.getenv("SIM_FAULT_CHANCE", "0.02")),
+        help="Probabilidad por tick de recomendación (ciclo alto / ámbar). Nunca para la estación.",
+    )
     p.add_argument("--recover-chance", type=float, default=0.25,
                    help="(Reservado) La recuperación es solo por comando del supervisor")
     p.add_argument("--once", action="store_true", help="Publica un ciclo y sale (útil en tests)")
@@ -62,32 +66,42 @@ def main():
     client = mqtt.Client(client_id="simpro-sensor-sim")
 
     def on_command(_client, _userdata, msg):
-        """El supervisor resuelve → reactivar estación en el simulador."""
+        """Comandos del backend: stop (operario) / resolve (supervisor)."""
         nonlocal sensors
         try:
             data = json.loads(msg.payload.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if data.get("action") != "resolve":
-            return
+
+        action = data.get("action")
         station_id = data.get("station_id")
         if not station_id and msg.topic.startswith(COMMAND_TOPIC_PREFIX + "/"):
             station_id = msg.topic.rsplit("/", 1)[-1]
-        if not station_id:
+        if not station_id or action not in ("stop", "resolve"):
             return
+
         with sensors_lock:
-            sensors = [
-                clear_down(s) if s.station_id == station_id else s
-                for s in sensors
-            ]
+            if action == "stop":
+                sensors = [
+                    apply_manual_stop(s, True) if s.station_id == station_id else s
+                    for s in sensors
+                ]
+            else:
+                sensors = [
+                    clear_down(s) if s.station_id == station_id else s
+                    for s in sensors
+                ]
+
         if not args.quiet:
-            print(f"  [RESOLVE] estación {station_id} reactivada por comando")
+            label = "STOP" if action == "stop" else "RESOLVE"
+            verb = "parada por operario" if action == "stop" else "reactivada por supervisor"
+            print(f"  [{label}] estación {station_id} {verb}")
 
     def on_connect(_client, _userdata, _flags, rc):
         if rc == 0:
             client.subscribe(f"{COMMAND_TOPIC_PREFIX}/#")
             if not args.quiet:
-                print(f"Suscrito a {COMMAND_TOPIC_PREFIX}/# (resoluciones)")
+                print(f"Suscrito a {COMMAND_TOPIC_PREFIX}/# (stop/resolve)")
 
     client.on_connect = on_connect
     client.on_message = on_command
@@ -102,7 +116,7 @@ def main():
     client.loop_start()
     if not args.quiet:
         print(f"Simulador conectado a {args.broker}:{args.port}")
-        print(f"Publicando cada {args.interval}s · fault={args.fault_chance}")
+        print(f"Publicando cada {args.interval}s · fault(recomendación)={args.fault_chance}")
         print("Ctrl+C para detener\n")
 
     try:
@@ -118,7 +132,12 @@ def main():
                 payload = json.dumps(s.to_mqtt_payload())
                 client.publish(s.topic(), payload, qos=0)
                 if not args.quiet:
-                    flag = "DOWN" if s.down else "ok"
+                    if s.down:
+                        flag = "DOWN"
+                    elif s.ciclo > s.meta * 1.12:
+                        flag = "WARN"
+                    else:
+                        flag = "ok"
                     print(
                         f"  [{flag}] {s.topic()}  ciclo={s.ciclo}s  oee={s.oee}%  units={s.units}"
                     )

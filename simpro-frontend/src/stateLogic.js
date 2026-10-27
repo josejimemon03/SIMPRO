@@ -141,16 +141,31 @@ export function reduceState(prev, action) {
         return Number.isFinite(n) ? n : fallback;
       };
       const unitsRaw = p.units ?? p.contador ?? p.raw?.units ?? p.raw?.contador;
+      let changed = false;
       draft.stations = draft.stations.map((s) => {
         if (s.id !== station_id) return s;
+        // Parada solo por operario (alerta abierta). La telemetría no para ni reactiva sola.
+        const hasOpenAlert = draft.alerts.some((a) => a.sid === s.id);
+        const nextDown = hasOpenAlert || s.down;
+        if (nextDown) {
+          // Congelar métricas: ciclo en 0; OEE y unidades quedan en el valor al momento de la parada.
+          if (s.ciclo !== 0 || !s.down) {
+            changed = true;
+            return { ...s, ciclo: 0, down: true };
+          }
+          return { ...s, down: true };
+        }
+        changed = true;
         return {
           ...s,
           ciclo: toNum(p.ciclo, s.ciclo),
           oee: toNum(p.oee, s.oee),
           units: toNum(unitsRaw, s.units),
-          down: typeof p.down === 'boolean' ? p.down : s.down,
+          down: false,
         };
       });
+      // No mover el histórico si la telemetría llegó a una estación detenida.
+      if (!changed) break;
       const act = draft.stations.filter((s) => !s.down);
       const avg = act.length ? Math.round(act.reduce((a, s) => a + s.ciclo, 0) / act.length) : 0;
       draft.trend = [...draft.trend, { t: fmtTime(new Date()), v: avg }];

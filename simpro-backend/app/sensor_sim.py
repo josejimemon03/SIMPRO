@@ -1,6 +1,7 @@
 from __future__ import annotations
+
 import random
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Optional
 
 STATIONS = (
@@ -13,10 +14,12 @@ STATIONS = (
 
 TOPIC_PREFIX = "simpro/produccion"
 U_META = 150
-U_MIN = 80  # Nuevo tope mínimo para las unidades
+U_MIN = 80
+
 
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
+
 
 @dataclass
 class SensorReading:
@@ -26,9 +29,10 @@ class SensorReading:
     ciclo: int
     oee: int
     units: int
-    down: bool
-    oee_direction: int = 1  
-    units_direction: int = 1  # NUEVO: Controla si las unidades suben (1) o bajan (-1)
+    down: bool = False
+    manual_stop: bool = False
+    oee_direction: int = 1
+    units_direction: int = 1
 
     def to_mqtt_payload(self) -> dict:
         return {
@@ -41,10 +45,12 @@ class SensorReading:
             "units": self.units,
             "contador": self.units,
             "down": self.down,
+            "manual_stop": self.manual_stop,
         }
 
     def topic(self) -> str:
         return f"{TOPIC_PREFIX}/{self.station_id}"
+
 
 def initial_sensors() -> list[SensorReading]:
     return [
@@ -59,30 +65,39 @@ def initial_sensors() -> list[SensorReading]:
         )
         for s in STATIONS
     ]
+
+
 def tick_sensor(
     sensor: SensorReading,
     *,
-    fault_chance: float = 0.02,
-    recover_chance: float = 0.25, # Se mantiene el argumento para no romper la función tick_all
+    fault_chance: float = 0.0,
+    recover_chance: float = 0.25,  # reservado (compat con tick_all / CLI)
     rng: Optional[random.Random] = None,
 ) -> SensorReading:
+    """Avanza un tick de telemetría.
+
+    - Parada solo por `manual_stop` (operario) o `down` ya aplicado.
+    - `fault_chance` solo empeora el ciclo (recomendación ámbar), nunca para.
+    """
+    del recover_chance  # no usado: la reactivación es solo por clear_down()
     r = rng or random
     s = SensorReading(**asdict(sensor))
 
-    # Sin autocuración: permanece down hasta clear_down() (comando del supervisor)
-    if s.down:
+    # Parada del operario (o down ya marcado): permanece hasta clear_down()
+    if s.manual_stop or s.down:
+        s.down = True
         s.ciclo = 0
         return s
 
-    if r.random() < fault_chance:
-        s.down = True
-        s.oee = max(40, s.oee - 18)
+    # Recomendación: ciclo alto → UI ámbar; no se marca down
+    if fault_chance > 0 and r.random() < fault_chance:
+        s.ciclo = int(round(s.meta * 1.2))
+        s.oee = max(40, s.oee - 8)
         return s
 
     delta = r.randint(-2, 2)
     s.ciclo = int(clamp(s.ciclo + delta, round(s.meta * 0.85), round(s.meta * 1.3)))
 
-    # --- Lógica de oscilación controlada del OEE ---
     if s.oee >= 100:
         s.oee_direction = -1
     elif s.oee <= 80:
@@ -92,32 +107,46 @@ def tick_sensor(
         paso = r.randint(1, 2)
         s.oee = int(clamp(s.oee + (s.oee_direction * paso), 40, 100))
 
-    # --- Lógica cíclica tipo "Ping-Pong" para las unidades ---
-    if not s.down:
-        # Evaluamos los límites para cambiar de dirección
-        if s.units >= U_META:
-            s.units_direction = -1
-        elif s.units <= U_MIN:
-            s.units_direction = 1
-            
-        # Aplicamos el incremento o decremento
-        s.units += s.units_direction
+    if s.units >= U_META:
+        s.units_direction = -1
+    elif s.units <= U_MIN:
+        s.units_direction = 1
+    s.units += s.units_direction
 
     return s
+
 
 def clear_down(sensor: SensorReading) -> SensorReading:
     """Reactiva una estación tras resolución del supervisor."""
     s = SensorReading(**asdict(sensor))
     s.down = False
+    s.manual_stop = False
     s.ciclo = s.meta
     s.oee = max(s.oee, 60)
     return s
 
 
+def apply_manual_stop(sensor: SensorReading, stop_status: bool = True) -> SensorReading:
+    """Aplica o retira la parada manual dictada por un operario."""
+    s = SensorReading(**asdict(sensor))
+    s.manual_stop = stop_status
+    if stop_status:
+        s.down = True
+        s.ciclo = 0
+    else:
+        s.down = False
+        s.ciclo = s.meta
+    return s
+
+
+# Alias histórico (WIP incompleto)
+toggle_manual_stop = apply_manual_stop
+
+
 def tick_all(
     sensors: list[SensorReading],
     *,
-    fault_chance: float = 0.02,
+    fault_chance: float = 0.0,
     recover_chance: float = 0.25,
     rng: Optional[random.Random] = None,
 ) -> list[SensorReading]:

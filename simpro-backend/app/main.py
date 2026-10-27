@@ -1,14 +1,25 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from app.mqtt import start_mqtt, stop_mqtt, set_message_callback, publish_resolve
+from app.mqtt import (
+    start_mqtt,
+    stop_mqtt,
+    set_message_callback,
+    publish_resolve,
+    publish_stop,
+)
+from app import sensor_runner
 from app.sensor_sim import STATIONS
+
+
+class SensorSimBody(BaseModel):
+    running: bool
 
 
 class ConnectionManager:
@@ -42,9 +53,6 @@ _STATION_NAMES = {s["id"]: s["name"] for s in STATIONS}
 # Loop de asyncio de FastAPI (Paho MQTT llama desde otro hilo)
 main_loop: Optional[asyncio.AbstractEventLoop] = None
 
-AUTO_PARADA_CAUSA = "Parada automática (sensor)"
-
-
 def _coalesce_units(payload: dict):
     raw = payload.get("units", None)
     if raw is None:
@@ -66,30 +74,15 @@ def _station_name(station_id: Optional[str], payload: dict) -> str:
     return station_id or "Estación"
 
 
-async def _broadcast_auto_parada(station_id: str, estacion: str):
-    """Avisa al supervisor cuando el sistema detecta una parada por telemetría."""
-    global _alert_seq
-    alert_id = _alert_seq
-    _alert_seq += 1
-    await manager.broadcast(
-        {
-            "type": "parada",
-            "id": alert_id,
-            "sid": station_id,
-            "estacion": estacion,
-            "causa": AUTO_PARADA_CAUSA,
-            "hora": datetime.now().strftime("%H:%M"),
-            "client_id": "system",
-        }
-    )
-
-
 def mqtt_to_ws_bridge(data: dict):
     """Puente MQTT → WebSocket. data = {topic, data} desde mqtt.py.
 
     Importante: on_message de Paho corre en un hilo distinto al event loop.
     Hay que usar run_coroutine_threadsafe; get_running_loop() falla ahí y
     silenciaba toda la telemetría (unidades, ciclo, OEE).
+
+    El sistema NO crea paradas automáticas: solo reenvía telemetría.
+    Las paradas las reporta el operario (report_parada).
     """
     global _station_down
     payload = data.get("data") or {}
@@ -104,7 +97,6 @@ def mqtt_to_ws_bridge(data: dict):
 
     name = _station_name(station_id, payload)
     is_down = payload.get("down")
-    was_down = _station_down.get(station_id, False) if station_id else False
 
     message = {
         "type": "telemetry",
@@ -118,8 +110,6 @@ def mqtt_to_ws_bridge(data: dict):
         "raw": payload,
     }
 
-    # Transición a parada automática → alerta de supervisor (misma vía que report_parada)
-    became_down = bool(is_down) and not was_down and bool(station_id)
     if station_id and isinstance(is_down, bool):
         _station_down[station_id] = is_down
 
@@ -132,10 +122,6 @@ def mqtt_to_ws_bridge(data: dict):
             return
 
     asyncio.run_coroutine_threadsafe(manager.broadcast(message), loop)
-    if became_down:
-        asyncio.run_coroutine_threadsafe(
-            _broadcast_auto_parada(station_id, name), loop
-        )
 
 
 @asynccontextmanager
@@ -148,6 +134,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"MQTT no disponible al iniciar (modo demo): {e}")
     yield
+    try:
+        sensor_runner.stop()
+    except Exception:
+        pass
     try:
         stop_mqtt()
     except Exception:
@@ -171,12 +161,41 @@ def read_root():
     return {"status": "SIMPRO Backend Operativo"}
 
 
+@app.get("/api/sensor-sim")
+def sensor_sim_status():
+    return sensor_runner.status()
+
+
+@app.post("/api/sensor-sim")
+def sensor_sim_control(body: SensorSimBody):
+    try:
+        if body.running:
+            result = sensor_runner.start()
+        else:
+            result = sensor_runner.stop()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.get("/api/health")
 def health():
+    db_status = {"connected": False, "error": None}
+    try:
+        from sqlalchemy import text
+        from app.database import engine
+
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_status["connected"] = True
+    except Exception as e:
+        db_status["error"] = str(e).split("\n")[0][:180]
+
     return {
         "ok": True,
         "service": "simpro-api",
         "ws_clients": len(manager.active_connections),
+        "database": db_status,
     }
 
 
@@ -207,6 +226,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 sid = msg.get("sid")
                 if sid:
                     _station_down[sid] = True
+                    # Persistir parada en el simulador/sensor para que no se reactive sola
+                    publish_stop(sid)
                 await manager.broadcast(
                     {
                         "type": "parada",

@@ -3,7 +3,7 @@
 import asyncio
 
 import app.main as main_mod
-from app.main import AUTO_PARADA_CAUSA, manager, mqtt_to_ws_bridge
+from app.main import manager, mqtt_to_ws_bridge
 
 
 def _run_bridge(payload, *, expect_min=1):
@@ -59,8 +59,8 @@ def test_station_id_from_payload_prefers_explicit():
     assert captured[0]["units"] == 99
 
 
-def test_telemetry_down_emits_supervisor_parada():
-    """Parada automática del sensor debe avisar al supervisor (evento parada)."""
+def test_telemetry_down_does_not_auto_parada():
+    """El sistema no crea paradas solas: telemetría down solo actualiza métricas."""
     captured = _run_bridge(
         {
             "topic": "simpro/produccion/soldadura",
@@ -73,52 +73,9 @@ def test_telemetry_down_emits_supervisor_parada():
                 "down": True,
             },
         },
-        expect_min=2,
+        expect_min=1,
     )
     types = [m["type"] for m in captured]
     assert "telemetry" in types
-    assert "parada" in types
-    parada = next(m for m in captured if m["type"] == "parada")
-    assert parada["sid"] == "soldadura"
-    assert parada["estacion"] == "Soldadura"
-    assert parada["causa"] == AUTO_PARADA_CAUSA
-    assert parada["client_id"] == "system"
-
-
-def test_telemetry_down_does_not_duplicate_parada():
-    captured = []
-
-    async def fake_broadcast(msg):
-        captured.append(msg)
-
-    original = manager.broadcast
-    manager.broadcast = fake_broadcast  # type: ignore
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    main_mod.main_loop = loop
-    main_mod._station_down.clear()
-
-    payload = {
-        "topic": "simpro/produccion/corte",
-        "data": {"station_id": "corte", "name": "Corte", "down": True, "ciclo": 0},
-    }
-
-    try:
-
-        async def run():
-            mqtt_to_ws_bridge(payload)
-            mqtt_to_ws_bridge(payload)
-            for _ in range(50):
-                await asyncio.sleep(0.01)
-                if len(captured) >= 3:
-                    break
-
-        loop.run_until_complete(run())
-    finally:
-        manager.broadcast = original
-        main_mod.main_loop = None
-        main_mod._station_down.clear()
-        loop.close()
-
-    paradas = [m for m in captured if m["type"] == "parada"]
-    assert len(paradas) == 1
+    assert "parada" not in types
+    assert captured[0]["down"] is True

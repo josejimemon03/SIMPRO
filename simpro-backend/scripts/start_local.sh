@@ -28,24 +28,21 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "1/3 Broker MQTT en $MQTT_BROKER:$MQTT_PORT"
+echo "1/2 Broker MQTT en $MQTT_BROKER:$MQTT_PORT"
 python scripts/run_broker.py --host "$MQTT_BROKER" --port "$MQTT_PORT" &
 PIDS+=($!)
 sleep 1
 
-echo "2/3 API FastAPI en http://127.0.0.1:8000"
+echo "2/2 API FastAPI en http://127.0.0.1:8000"
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload &
 PIDS+=($!)
 sleep 2
-
-echo "3/3 Simulador de sensores"
-python scripts/simulate_sensors.py --broker "$MQTT_BROKER" --port "$MQTT_PORT" &
-PIDS+=($!)
 
 echo ""
 echo "SIMPRO local listo (sin Docker)."
 echo "  API:       http://127.0.0.1:8000"
 echo "  Health:    http://127.0.0.1:8000/api/health"
+echo "  Sensores:  inactivos hasta el botón en el frontend"
 echo "  Frontend:  cd ../simpro-frontend && npm run dev"
 echo ""
 echo "Ctrl+C para detener todo."

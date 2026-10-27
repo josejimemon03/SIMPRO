@@ -14,7 +14,10 @@ def _stub_mqtt(monkeypatch):
 @pytest.fixture
 def client():
     from app.main import app, manager
+    from app import sensor_runner
 
     manager.active_connections.clear()
+    sensor_runner.stop()
     with TestClient(app) as c:
         yield c
+    sensor_runner.stop()

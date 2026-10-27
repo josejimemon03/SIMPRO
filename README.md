@@ -6,7 +6,7 @@ Incluye:
 
 - **Frontend** (React + Vite) — vistas Operario y Supervisor  
 - **Backend** (FastAPI + WebSocket) — sincronización en tiempo real  
-- **Broker MQTT + simulador de sensores** — telemetría y paradas automáticas  
+- **Broker MQTT + simulador de sensores** — telemetría y recomendaciones (ámbar)  
 
 ---
 
@@ -59,7 +59,7 @@ Eso levanta:
 
 - Broker MQTT en `127.0.0.1:1883`
 - API en [http://127.0.0.1:8000](http://127.0.0.1:8000)
-- Simulador de sensores (telemetría y fallas aleatorias)
+- Simulador de sensores (telemetría; recomendaciones por ciclo alto, sin paradas automáticas)
 
 Deja esta terminal abierta. `Ctrl+C` detiene todo el backend.
 
@@ -118,9 +118,9 @@ docker compose --profile sim down
 ## Cómo probar la app
 
 1. Entra como **Supervisor** o **Operario**.
-2. **Operario**: elige una estación y reporta una parada → el supervisor ve la alerta.
+2. **Operario**: elige una estación y reporta una parada → la estación queda parada y el supervisor ve la alerta.
 3. **Supervisor**: “Marcar como resuelta” reactiva la estación.
-4. El **simulador** también puede parar estaciones solo (causa *Parada automática (sensor)*); el supervisor recibe la alerta y puede reactivarlas igual.
+4. El **sistema no para estaciones solo**: si el ciclo sube demasiado, muestra recomendación (ámbar) para que el operario revise y, si aplica, reporte la parada.
 
 ---
 

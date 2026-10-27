@@ -7,6 +7,46 @@ def test_root_status(client):
     assert "SIMPRO" in r.json()["status"]
 
 
+def test_sensor_sim_starts_stopped(client):
+    r = client.get("/api/sensor-sim")
+    assert r.status_code == 200
+    assert r.json()["running"] is False
+
+
+def test_sensor_sim_toggle(client, monkeypatch):
+    class FakeProc:
+        def __init__(self):
+            self.pid = 4242
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    import app.sensor_runner as runner
+
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(runner, "_proc", None)
+
+    start = client.post("/api/sensor-sim", json={"running": True})
+    assert start.status_code == 200
+    assert start.json()["running"] is True
+
+    status = client.get("/api/sensor-sim")
+    assert status.json()["running"] is True
+
+    stop = client.post("/api/sensor-sim", json={"running": False})
+    assert stop.status_code == 200
+    assert stop.json()["running"] is False
+
+
 def test_health_ok(client):
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -14,6 +54,31 @@ def test_health_ok(client):
     assert body["ok"] is True
     assert body["service"] == "simpro-api"
     assert body["ws_clients"] == 0
+
+
+def test_health_reports_database_connection(client, monkeypatch):
+    from app.database import engine
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def execute(self, _query):
+            return None
+
+    monkeypatch.setattr(engine, "connect", lambda: FakeConnection())
+    response = client.get("/api/health")
+    assert response.json()["database"] == {"connected": True, "error": None}
+
+    def fail_connect():
+        raise ConnectionError("database unavailable")
+
+    monkeypatch.setattr(engine, "connect", fail_connect)
+    response = client.get("/api/health")
+    assert response.json()["database"] == {"connected": False, "error": "database unavailable"}
 
 
 def test_ws_hello_welcome(client):

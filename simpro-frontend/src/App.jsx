@@ -3,6 +3,9 @@ import {
   CAUSAS, U_META, fmtTime, status, LABEL, getInitialState, reduceState, averageOee, clamp,
 } from './stateLogic';
 import { useSimproSocket } from './useSimproSocket';
+import { exportGerenteCsv } from './exportReport';
+
+const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
 
 const IconHelmet = () => (
   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -48,7 +51,7 @@ const LineChart = ({ points }) => {
     const gy = y(gv);
     grids.push(
       <g key={`grid-${i}`}>
-        <line x1={l} x2={W - r} y1={gy} y2={gy} stroke="#1E2C3C" />
+        <line x1={l} x2={W - r} y1={gy} y2={gy} stroke="#C5D4E2" />
         <text x={l - 6} y={gy + 3} textAnchor="end">{Math.round(gv)}</text>
       </g>
     );
@@ -62,8 +65,8 @@ const LineChart = ({ points }) => {
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Tendencia del tiempo de ciclo promedio">
       {grids}
       <path d={areaD} fill="rgba(127,177,219,.10)" />
-      <path d={pathD} fill="none" stroke="#7FB1DB" strokeWidth="2" strokeLinejoin="round" />
-      <circle cx={x(points.length - 1)} cy={y(last.v)} r="4" fill="#7FB1DB">
+      <path d={pathD} fill="none" stroke="#4B7DA5" strokeWidth="2" strokeLinejoin="round" />
+      <circle cx={x(points.length - 1)} cy={y(last.v)} r="4" fill="#4B7DA5">
         <title>{last.v} seg</title>
       </circle>
       {[0, Math.floor(points.length / 2), points.length - 1].map((idx) => (
@@ -84,7 +87,7 @@ const BarChart = ({ data, target }) => {
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="OEE consolidado">
       {[0, 25, 50, 75, 100].map(v => (
         <g key={`y-${v}`}>
-          <line x1={l} x2={W - r} y1={y(v)} y2={y(v)} stroke="#1E2C3C" />
+          <line x1={l} x2={W - r} y1={y(v)} y2={y(v)} stroke="#C5D4E2" />
           <text x={l - 6} y={y(v) + 3} textAnchor="end">{v}</text>
         </g>
       ))}
@@ -93,10 +96,10 @@ const BarChart = ({ data, target }) => {
         const live = i === n - 1;
         return (
           <g key={`bar-${i}`}>
-            <rect x={bx} y={by} width={w} height={h} fill={live ? '#7FB1DB' : '#4A7FA6'} rx="2">
+            <rect x={bx} y={by} width={w} height={h} fill={live ? '#B7C5D0' : '#4B7DA5'} rx="2">
               <title>{d.l}: {d.v}%</title>
             </rect>
-            <text x={bx + w / 2} y={by - 5} textAnchor="middle" style={{ fill: '#E8EEF3' }}>{d.v}</text>
+            <text x={bx + w / 2} y={by - 5} textAnchor="middle" style={{ fill: '#1B2A38' }}>{d.v}</text>
             <text x={bx + w / 2} y={H - 8} textAnchor="middle">{d.l}</text>
           </g>
         );
@@ -124,7 +127,7 @@ const HBars = ({ items, max, colorFn, suffix = '' }) => (
   </>
 );
 
-const TopBar = ({ role, setRole, onReset, connected }) => {
+const TopBar = ({ role, setRole, onReset, connected, simRunning, simBusy, onToggleSim }) => {
   const p = (r, lbl) => (
     <button className={`pill ${role === r ? 'active' : ''}`} onClick={() => setRole(r)}>{lbl}</button>
   );
@@ -143,6 +146,14 @@ const TopBar = ({ role, setRole, onReset, connected }) => {
         {p('gerente', 'Gerente')}
       </div>
       <div className="top-actions">
+        <button
+          className={`btn ${simRunning ? 'sim-on' : 'solid'}`}
+          onClick={onToggleSim}
+          disabled={simBusy}
+          title={simRunning ? 'Detiene la telemetría simulada' : 'Arranca la telemetría de sensores'}
+        >
+          {simBusy ? 'Esperando…' : simRunning ? 'Detener sensores' : 'Activar simulación de sensores'}
+        </button>
         <button className="btn ghost" onClick={onReset} title="Vuelve los datos al estado inicial">Reiniciar demo</button>
         <button className="btn" onClick={() => setRole('entry')}>← Inicio</button>
       </div>
@@ -150,7 +161,7 @@ const TopBar = ({ role, setRole, onReset, connected }) => {
   );
 };
 
-const ViewEntry = ({ setRole }) => {
+const ViewEntry = ({ setRole, simRunning, simBusy, onToggleSim }) => {
   const card = (r, icon, title, desc) => (
     <button className="role-card" onClick={() => setRole(r)}>
       {icon}
@@ -164,12 +175,21 @@ const ViewEntry = ({ setRole }) => {
       <div className="entry-tag">Metaloide S.A.S. — Línea de producción</div>
       <h1 className="entry-title">SIMPRO</h1>
       <p className="entry-sub">Sistema Inteligente de Monitoreo de Procesos. Elige un rol para ver el sistema desde su punto de vista.</p>
+      <div className="entry-sim">
+        <button
+          className={`btn ${simRunning ? 'sim-on' : 'solid'}`}
+          onClick={onToggleSim}
+          disabled={simBusy}
+        >
+          {simBusy ? 'Esperando…' : simRunning ? 'Detener simulación de sensores' : 'Activar simulación de sensores'}
+        </button>
+        <p className="note">{simRunning ? 'Sensores en vivo: ciclo, OEE y unidades se actualizan.' : 'Los sensores están en pausa. Actívalos cuando quieras ver telemetría.'}</p>
+      </div>
       <div className="role-cards">
         {card('operario', <IconHelmet />, 'Operario', 'Semáforo de su estación, meta del turno y reporte de paradas.')}
         {card('supervisor', <IconRadar />, 'Supervisor', 'Estado de toda la línea, OEE en vivo y alertas activas.')}
         {card('gerente', <IconChart />, 'Gerente', 'Desempeño consolidado, comparativos y causas de paradas.')}
       </div>
-      <p className="entry-hint"><b>Sugerencia para la demostración:</b> entra como Operario, reporta una parada, cambia a Supervisor para ver la alerta, resuélvela y termina en Gerente para ver cómo quedó registrada la causa. Las paradas se sincronizan con el backend vía WebSocket.</p>
     </div>
   );
 };
@@ -299,7 +319,17 @@ const ViewGerente = ({ state, dispatch, clock, oee }) => {
     <div className="view">
       <div className="view-head">
         <div className="view-role">Vista: Gerente de planta</div>
-        <div className="live">Consolidado · actualizado <span>{clock}</span></div>
+        <div className="top-actions">
+          <button
+            type="button"
+            className="btn solid"
+            onClick={() => exportGerenteCsv(state, oee)}
+            title="Descargar CSV con estaciones, paradas y causas"
+          >
+            Exportar CSV
+          </button>
+          <div className="live">Consolidado · actualizado <span>{clock}</span></div>
+        </div>
       </div>
       <div className="grid g4">
         <div className="panel kpi"><div className="lbl">Productividad (OEE actual)</div><div className="v">{oee}%</div><div className="d">Meta: 85%</div></div>
@@ -350,10 +380,10 @@ const Modal = ({ state, dispatch }) => {
 
 const globalCSS = `
   :root{
-    --bg:#0B1420; --surface:#121D2B; --surface2:#1A2836; --line:#26374A;
-    --steel:#4A7FA6; --steel-bright:#7FB1DB;
-    --ok:#2FB86E; --warn:#E0A526; --bad:#E5484D;
-    --text:#E8EEF3; --muted:#8FA3B5;
+    --bg:#DFECF6; --surface:#FFFFFF; --surface2:#E8EDF0; --line:#C8D2D9;
+    --steel:#4B7DA5; --steel-bright:#344F70;
+    --ok:#1E9A58; --warn:#C48A12; --bad:#D03A40;
+    --text:#1B2A38; --muted:#5B7388;
     --display:'Oswald','Roboto Condensed','Arial Narrow','Helvetica Neue Condensed',sans-serif;
     --body:'Inter','Segoe UI',-apple-system,system-ui,Roboto,sans-serif;
     --mono:'IBM Plex Mono','SF Mono',Consolas,Menlo,'Courier New',monospace;
@@ -376,17 +406,21 @@ const globalCSS = `
   .pill.active{background:var(--steel);color:#fff;}
   .top-actions{display:flex;gap:8px;align-items:center;}
   .btn{font-weight:600;font-size:13px;padding:8px 14px;border-radius:4px;cursor:pointer;border:1px solid var(--steel);background:transparent;color:var(--steel-bright);}
-  .btn:hover{background:rgba(74,127,166,.14);}
+  .btn:hover{background:rgba(75,125,165,.14);}
   .btn.solid{background:var(--steel);color:#fff;}
-  .btn.solid:hover{background:var(--steel-bright);color:#0B1420;}
+  .btn.solid:hover{background:var(--steel-bright);color:#fff;}
   .btn.ghost{border-color:var(--line);color:var(--muted);}
+  .btn.sim-on{background:var(--ok);border-color:var(--ok);color:#fff;}
+  .btn.sim-on:hover{background:#177a46;color:#fff;}
   .btn[disabled]{opacity:.5;cursor:not-allowed;}
 
   /* ---------- Entry ---------- */
   .entry{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;text-align:center;}
   .entry-tag{font-family:var(--mono);font-size:12px;letter-spacing:2px;color:var(--steel-bright);text-transform:uppercase;margin-bottom:14px;}
   .entry-title{font-family:var(--display);font-size:clamp(44px,8vw,72px);font-weight:700;letter-spacing:2px;line-height:1;margin-bottom:12px;}
-  .entry-sub{color:var(--muted);max-width:500px;font-size:15px;line-height:1.55;margin-bottom:38px;}
+  .entry-sub{color:var(--muted);max-width:500px;font-size:15px;line-height:1.55;margin-bottom:22px;}
+  .entry-sim{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:32px;}
+  .entry-sim .note{margin:0;max-width:420px;}
   .role-cards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;}
   .role-card{width:230px;background:var(--surface);border:1px solid var(--line);padding:24px 20px;cursor:pointer;text-align:left;transition:border-color .15s,transform .15s;}
   .role-card:hover{border-color:var(--steel);transform:translateY(-2px);}
@@ -468,7 +502,7 @@ const globalCSS = `
   svg.chart text{font-family:var(--mono);fill:#8FA3B5;font-size:10px;}
 
   /* modal */
-  .backdrop{position:fixed;inset:0;background:rgba(5,10,16,.72);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;}
+  .backdrop{position:fixed;inset:0;background:rgba(27,42,56,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;}
   .modal{background:var(--surface);border:1px solid var(--steel);width:100%;max-width:390px;padding:22px;position:relative;}
   .modal h4{font-family:var(--display);font-size:18px;font-weight:600;margin-bottom:4px;}
   .modal .sub{font-size:12.5px;color:var(--muted);margin-bottom:16px;}
@@ -482,6 +516,8 @@ const globalCSS = `
 export default function App() {
   const [state, setState] = useState(getInitialState());
   const [clock, setClock] = useState(fmtTime(new Date()));
+  const [simRunning, setSimRunning] = useState(false);
+  const [simBusy, setSimBusy] = useState(false);
   const clientIdRef = useRef(null);
   const lastTelemetryAt = useRef(0);
 
@@ -548,13 +584,48 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Simulación local si no hay backend, o si el WS está up pero no llega MQTT
+    let cancelled = false;
+    fetch(`${API_BASE}/api/sensor-sim`)
+      .then((r) => r.json())
+      .then((body) => {
+        if (!cancelled && typeof body.running === 'boolean') setSimRunning(body.running);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleSim = useCallback(async () => {
+    const next = !simRunning;
+    setSimBusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/sensor-sim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ running: next }),
+      });
+      if (r.ok) {
+        const body = await r.json();
+        setSimRunning(Boolean(body.running));
+      } else {
+        setSimRunning(next);
+      }
+    } catch {
+      // Sin backend: simulación local de respaldo
+      setSimRunning(next);
+    } finally {
+      setSimBusy(false);
+    }
+  }, [simRunning]);
+
+  useEffect(() => {
+    if (!simRunning) return undefined;
+    // Simulación local si no hay MQTT, o si el WS está up pero no llega telemetría
     const simTimer = setInterval(() => {
       const stale = Date.now() - lastTelemetryAt.current > 4000;
       if (!connected || stale) dispatch({ type: 'SIMULATE_TICK' });
     }, 3000);
     return () => clearInterval(simTimer);
-  }, [dispatch, connected]);
+  }, [dispatch, connected, simRunning]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -571,7 +642,12 @@ export default function App() {
       <style>{globalCSS}</style>
       <div id="app">
         {state.role === 'entry' ? (
-          <ViewEntry setRole={(r) => dispatch({ type: 'SET_ROLE', payload: r })} />
+          <ViewEntry
+            setRole={(r) => dispatch({ type: 'SET_ROLE', payload: r })}
+            simRunning={simRunning}
+            simBusy={simBusy}
+            onToggleSim={toggleSim}
+          />
         ) : (
           <>
             <TopBar
@@ -579,6 +655,9 @@ export default function App() {
               setRole={(r) => dispatch({ type: 'SET_ROLE', payload: r })}
               onReset={() => dispatch({ type: 'RESET' })}
               connected={connected}
+              simRunning={simRunning}
+              simBusy={simBusy}
+              onToggleSim={toggleSim}
             />
             {state.role === 'operario' && <ViewOperario state={state} dispatch={dispatchAndSync} clock={clock} />}
             {state.role === 'supervisor' && <ViewSupervisor state={state} dispatch={dispatchAndSync} clock={clock} oee={oee} />}

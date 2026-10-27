@@ -97,16 +97,52 @@ describe('reduceState — paradas y alertas', () => {
     expect(state.stations.find((s) => s.id === 'corte').units).toBe(146);
   });
 
-  it('APPLY_TELEMETRY marca estación down desde sensor', () => {
+  it('APPLY_TELEMETRY no para estación sin alerta de operario', () => {
     let state = getInitialState();
     state = reduceState(state, {
       type: 'APPLY_TELEMETRY',
       payload: { station_id: 'soldadura', down: true, ciclo: 0, oee: 50 },
     });
-    expect(state.stations.find((s) => s.id === 'soldadura').down).toBe(true);
+    expect(state.stations.find((s) => s.id === 'soldadura').down).toBe(false);
   });
 
-  it('APPLY_PARADA de parada automática crea alerta resoluble', () => {
+  it('APPLY_TELEMETRY no reactiva estación con alerta abierta', () => {
+    let state = getInitialState();
+    state.opStation = 'soldadura';
+    state = reduceState(state, { type: 'PICK_CAUSE', payload: 'Falla de máquina', hora: '10:00' });
+    expect(state.stations.find((s) => s.id === 'soldadura').down).toBe(true);
+
+    state = reduceState(state, {
+      type: 'APPLY_TELEMETRY',
+      payload: { station_id: 'soldadura', down: false, ciclo: 55, oee: 80, units: 130 },
+    });
+    const st = state.stations.find((s) => s.id === 'soldadura');
+    expect(st.down).toBe(true);
+    expect(st.ciclo).toBe(0);
+  });
+
+  it('APPLY_TELEMETRY congela OEE y unidades mientras la estación está parada', () => {
+    let state = getInitialState();
+    state.opStation = 'soldadura';
+    state = reduceState(state, { type: 'PICK_CAUSE', payload: 'Falla de máquina', hora: '10:00' });
+    const frozen = state.stations.find((s) => s.id === 'soldadura');
+    const oeeAtStop = frozen.oee;
+    const unitsAtStop = frozen.units;
+    const trendLen = state.trend.length;
+
+    state = reduceState(state, {
+      type: 'APPLY_TELEMETRY',
+      payload: { station_id: 'soldadura', down: false, ciclo: 99, oee: 95, units: 999 },
+    });
+    const st = state.stations.find((s) => s.id === 'soldadura');
+    expect(st.down).toBe(true);
+    expect(st.ciclo).toBe(0);
+    expect(st.oee).toBe(oeeAtStop);
+    expect(st.units).toBe(unitsAtStop);
+    expect(state.trend.length).toBe(trendLen);
+  });
+
+  it('APPLY_PARADA remota mantiene estación parada hasta resolve', () => {
     let state = getInitialState();
     state = reduceState(state, {
       type: 'APPLY_PARADA',
@@ -114,7 +150,7 @@ describe('reduceState — paradas y alertas', () => {
         id: 50,
         sid: 'troquelado',
         estacion: 'Troquelado',
-        causa: 'Parada automática (sensor)',
+        causa: 'Falta de material',
         hora: '08:30',
       },
     });

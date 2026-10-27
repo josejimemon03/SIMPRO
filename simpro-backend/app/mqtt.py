@@ -53,15 +53,24 @@ def stop_mqtt():
     mqtt_client.disconnect()
 
 
-def publish_resolve(station_id: str) -> bool:
-    """Publica comando MQTT para que el sensor/simulador reactive la estación."""
+def _publish_command(station_id: str, action: str) -> bool:
     if not station_id:
         return False
     topic = f"{COMMAND_TOPIC_PREFIX}/{station_id}"
-    payload = json.dumps({"action": "resolve", "station_id": station_id})
+    payload = json.dumps({"action": action, "station_id": station_id})
     try:
         result = mqtt_client.publish(topic, payload, qos=0)
         return result.rc == mqtt.MQTT_ERR_SUCCESS
     except Exception as e:
-        print(f"Error publicando comando de resolución: {e}")
+        print(f"Error publicando comando MQTT ({action}): {e}")
         return False
+
+
+def publish_stop(station_id: str) -> bool:
+    """Publica comando MQTT para que el sensor/simulador mantenga la estación parada."""
+    return _publish_command(station_id, "stop")
+
+
+def publish_resolve(station_id: str) -> bool:
+    """Publica comando MQTT para que el sensor/simulador reactive la estación."""
+    return _publish_command(station_id, "resolve")
